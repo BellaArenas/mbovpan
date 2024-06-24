@@ -252,37 +252,24 @@ process spotyping {
     }
 
 
+process fastp {
+    tag "${sample_id}"
+    conda 'bioconda::fastp'
 
-//     process fastp {
+    publishDir = "$output/mbovpan_results/read_trimming"
+    //publishDir "${params.output}/mbovpan_results/read_trimming", mode: 'copy'
 
-//     conda 'bioconda::fastp'
+    input:
+    tuple val(sample_id), path(read_one), path(read_two)
 
-//     publishDir = "$output/mbovpan_results/read_trimming"
+    output:
+    tuple val(sample_id), path("${read_one.baseName.replaceAll('_1$', '')}_trimmed_R*.fastq"), emit: trimmed_reads
 
-//     cpus threads
-
-//     input:
-//     tuple file(read_one), file(read_two) from spoligo_process
-
-//     output:
-//     file("${read_one.baseName - ~/_1/}_trimmed_R*.fastq") into fastp_ch
- 
-//     script:
-//     """
-//     fastp -w ${task.cpus} -q 30 --detect_adapter_for_pe -i  ${read_one} -I  ${read_two} -o  ${read_one.baseName - ~/_1/}_trimmed_R1.fastq -O  ${read_one.baseName - ~/_1/}_trimmed_R2.fastq
-//     """
-
-//     }
-
-//     fastp_ch.into {
-//         fastp_reads1
-//         fastp_reads2
-//         fastp_reads3
-//         fastp_reads4
-//         fastp_reads5
-//         fastp_reads_lineage
-//     }
-
+    script:
+    """
+    fastp -w ${params.threads} -q 30 --detect_adapter_for_pe -i ${read_one} -I ${read_two} -o ${read_one.baseName.replaceAll("_1\$", "")}_trimmed_R1.fastq -O ${read_one.baseName.replaceAll("_1\$", "")}_trimmed_R2.fastq    
+    """
+}
 
 //     process post_fastqc {
 
