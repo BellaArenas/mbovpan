@@ -190,6 +190,13 @@ workflow {
 
     spotyping(reads)
     pre_fastqc(spotyping.out.spoligo_ch)
+    fastp(spotyping.out.spoligo_ch)
+    post_fastqc(fastp.out.trimmed_reads)
+    lineage(fastp.out.trimmed_reads)
+    if(run_mode == "snp" || run_mode == "all"){
+        read_map(fastp.out.trimmed_reads)
+        mark_dups(read_map.out.bam)
+    }
 
 }
 
@@ -225,7 +232,8 @@ process spotyping {
 
 }   
 
-    process pre_fastqc {
+process pre_fastqc {
+    tag "${sample_id}"
 
     publishDir "${params.output}/mbovpan_results/fastqc", mode: 'copy'
 
@@ -240,30 +248,25 @@ process spotyping {
     path("pre_fastqc_${read_one.baseName - ~/_1*/}_logs/*"), emit: fastqc_ch1
 
     script:
-
     """
-
     mkdir pre_fastqc_${read_one.baseName - ~/_1*/}_logs
 
     fastqc -o pre_fastqc_${read_one.baseName - ~/_1*/}_logs -f fastq -q ${read_one} ${read_two}
-
     """
 
-    }
-
+}
 
 process fastp {
     tag "${sample_id}"
     conda 'bioconda::fastp'
 
-    publishDir = "$output/mbovpan_results/read_trimming"
-    //publishDir "${params.output}/mbovpan_results/read_trimming", mode: 'copy'
+    publishDir "${params.output}/mbovpan_results/read_trimming", mode: 'copy'
 
     input:
     tuple val(sample_id), path(read_one), path(read_two)
 
     output:
-    tuple val(sample_id), path("${read_one.baseName.replaceAll('_1$', '')}_trimmed_R*.fastq"), emit: trimmed_reads
+    tuple val(sample_id), path("${read_one.baseName.replaceAll('_1$', '')}_trimmed_R1.fastq"), path("${read_one.baseName.replaceAll('_1$', '')}_trimmed_R2.fastq"), emit: trimmed_reads
 
     script:
     """
@@ -271,93 +274,86 @@ process fastp {
     """
 }
 
-//     process post_fastqc {
+process post_fastqc {
+    tag "${sample_id}"
 
-//     conda 'bioconda::fastqc'
+    publishDir "${params.output}/mbovpan_results/fastqc", mode: 'copy'
 
-//     publishDir = "$output/mbovpan_results/fastqc"
+    conda 'bioconda::fastqc'
 
-//     input:
-//     tuple file(trim1), file(trim2) from spoligo_post
+    input:
+    tuple val(sample_id), path(trim_one), path(trim_two)
 
-//     output:
-//     file("post_fastqc_${trim1.baseName - ~/_1*/}_logs") into fastqc_ch2
+    output:
+    path("post_fastqc_${trim_one.baseName - ~/_1*/}_logs/*"), emit: fastqc_ch2
 
-//     script:
-//     """
-//     mkdir  post_fastqc_${trim1.baseName - ~/_1/}_logs
-//     fastqc -o  post_fastqc_${trim1.baseName - ~/_1/}_logs -f fastq -q ${trim1} ${trim2}
-//     """
-//     }
+    script:
+    """
+    mkdir post_fastqc_${trim_one.baseName - ~/_1*/}_logs
 
-//     process lineage {
+    fastqc -o post_fastqc_${trim_one.baseName - ~/_1*/}_logs -f fastq -q ${trim_one} ${trim_two}
+    """
+}
 
-//     publishDir = "$output/mbovpan_results/lineage"
+process lineage {
+    tag "${sample_id}"
 
-//     conda "$workflow.projectDir/envs/tbprofile.yaml"
+    publishDir "${params.output}/mbovpan_results/lineage", mode: 'copy'
 
-//     input:
-//     tuple file(trim1), file(trim2) from fastp_reads_lineage
+    conda "${workflow.projectDir}/envs/tbprofile.yaml"
 
-//     output:
-//     file("${trim1.baseName - ~/_trimmed_R*/}.results.json") into tbprofile_ch 
- 
-//     script:
-//     """
-//     tb-profiler profile --read1 ${trim1} --read2 ${trim2} --no_delly --prefix ${trim1.baseName - ~/_trimmed_R*/}
-//     cp ./results/${trim1.baseName - ~/_trimmed_R*/}.results.json ./
-//     """
+    input:
+    tuple val(sample_id), path(trim_one), path(trim_two)
 
-//     }
+    output:
+    path("${trim_one.baseName.replaceAll('_trimmed_R.*', '')}.results.json"), emit: tbprofile_ch
 
-// bam = Channel.create()
+    script:
+    """
+    tb-profiler profile --read1 ${trim_one} --read2 ${trim_two} --no_delly --prefix ${trim_one.baseName.replaceAll('_trimmed_R.*', '')}
+    cp ./results/${trim_one.baseName.replaceAll('_trimmed_R.*', '')}.results.json ./
+    """
+}
 
-// if(run_mode == "snp" || run_mode == "all"){
+process read_map {
+    tag "${sample_id}"
 
-//     process read_map {
-//     publishDir = output 
+    publishDir "${params.output}", mode: 'copy'
 
-//     cpus threads
-    
-//     conda "samtools bioconda::bowtie2=2.4.2"
-   
-//     input:
-//     tuple file(trim1), file (trim2) from fastp_reads2 
+    conda "samtools bioconda::bowtie2"
 
-//     output:
-//     file("${trim1.baseName - ~/_trimmed_R*/}.bam")  into map_ch 
+    input:
+    tuple val (sample_id), path(trim_one), path(trim_two)
 
-//     script:
-//     """    
-//     bowtie2 --threads ${task.cpus} -x $workflow.projectDir/ref/mbov_bowtie_index -1 ${trim1} -2 ${trim2} | samtools view -Sb | samtools sort -o ${trim1.baseName - ~/_trimmed_R*/}.bam
-//     """
-//     }
+    output:
+    tuple val(sample_id), path("${trim_one.baseName.replaceAll('_trimmed_R.*', '')}.bam"), emit: bam
 
-//     bam = map_ch
+    script:
+    """
+    bowtie2 --threads ${task.cpus} -x ${workflow.projectDir}/ref/mbov_bowtie_index -1 ${trim_one} -2 ${trim_two} | samtools view -Sb | samtools sort -o ${trim_one.baseName.replaceAll('_trimmed_R.*', '')}.bam
+    """
+}
 
-//     process mark_dups {
-//     publishDir = "$output/mbovpan_results/readmapping" 
+process mark_dups {
+    tag "${bam.baseName}"
 
-//     conda "$workflow.projectDir/envs/picard.yaml"    
+    publishDir "${params.output}/mbovpan_results/readmapping", mode: 'copy'
 
-//     input:
-//     file(bam) from bam
+    conda "${workflow.projectDir}/envs/picard.yaml"
 
-//     output:
-//     file("${bam.baseName}.nodup.bam") into nodup_ch
+    input:
+    tuple val(sample_id), file(bam)
 
-//     script:
-//     """
-//     picard MarkDuplicates INPUT=${bam} OUTPUT=${bam.baseName}.nodup.bam ASSUME_SORTED=true REMOVE_DUPLICATES=true METRICS_FILE=dup_metrics.csv USE_JDK_DEFLATER=true USE_JDK_INFLATER=true
-//     samtools index ${bam.baseName}.nodup.bam
-//     cp ${bam.baseName}.nodup.bam.bai $workflow.launchDir
-//     """
-//     }
+    output:
+    tuple val(sample_id), file("${bam.baseName}.nodup.bam"), emit: nodup_bam
+    path "${bam.baseName}.nodup.bam.bai", emit: nodup_bai
 
-//     nodup_ch.into {
-//         nodup1_ch
-//         nodup2_ch
-//     }
+    script:
+    """
+    picard MarkDuplicates INPUT=${bam} OUTPUT=${bam.baseName}.nodup.bam ASSUME_SORTED=true REMOVE_DUPLICATES=true METRICS_FILE=dup_metrics.csv USE_JDK_DEFLATER=true USE_JDK_INFLATER=true
+    samtools index ${bam.baseName}.nodup.bam
+    """
+}
 
 //     process freebayes {
 //     publishDir = "$output/mbovpan_results/variant_calling" 
