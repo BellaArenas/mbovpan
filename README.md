@@ -69,6 +69,17 @@ With the test data already downloaded, the parameter **'--input ./mbovis_input/'
 
 **--output ./** stipulates where the output directory "mbovpan_results" will be created
 
+### Quickstart with Docker
+#### Building and running Dockerfile
+```
+# Download the Dockerfile in a directory where you would want to run mbovpan
+docker build -t mbovpan:image .
+docker run -it mbovpan:image /bin/bash
+```
+#### Example run
+```
+(base)# nextflow run ./main.nf --input ./mbovis_input/ --run snp --output ./ --threads 16
+```
 ### Additional Usages
 
 ```
