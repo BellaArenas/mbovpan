@@ -120,10 +120,19 @@ else{
     println "mbovpan will run using ${threads} threads by default"
 }
 
+//reads = Channel.fromFilePairs("${params.input}*{1,2}*.f*q*", size: 2, flat: true).ifEmpty { error "Cannot find the read files" }
 
-// finding the reads from the input file location 
-reads = Channel.fromFilePairs("$input*{1,2}*.f*q*").ifEmpty { error "Cannot find the read files" }
+// mark_dups_ch = Channel.fromPath("/groups/lilianasalvador/barenas/scripts/mbovpan/process_09_new/mbovpan_results/readmapping/*.bam")
+// mark_dups_bai_ch = Channel.fromPath("/groups/lilianasalvador/barenas/scripts/mbovpan/process_09_new/mbovpan_results/readmapping/*.bam.bai")
 
+// freebayes_ch = Channel.fromPath('/groups/lilianasalvador/barenas/scripts/mbovpan/process_09_new/mbovpan_results/variant_calling/*.vcf')
+
+// assembly_ch = Channel.fromPath("/groups/lilianasalvador/barenas/scripts/mbovpan/process_13/*scaffold.fasta")
+
+// panaroo_ch = Channel.fromPath("/groups/lilianasalvador/barenas/scripts/mbovpan/process_17/mbovpan_results/pangenome/*")
+
+filter_ch = Channel.fromPath("/groups/lilianasalvador/barenas/scripts/mbovpan/process_09_new/mbovpan_results/variant_calling/*.vcf")
+    .filter { it.name.endsWith('.filtered.vcf') }
 
 println(""" 
     M B O V P A N (v1.0.0)    
@@ -184,53 +193,70 @@ workflow {
 
     println("mbovpan will run using ${params.threads} threads by default")
 
-    // Define the channel for read pairs
-
-    reads = Channel.fromFilePairs("${params.input}*{1,2}*.f*q*", size: 2, flat: true).ifEmpty { error "Cannot find the read files" }
-
-    spotyping(reads)
-    pre_fastqc(spotyping.out.spoligo_ch)
-    fastp(spotyping.out.spoligo_ch)
-    post_fastqc(fastp.out.trimmed_reads)
-    lineage(fastp.out.trimmed_reads)
+    // spotyping(reads)
+    // pre_fastqc(spotyping.out.spoligo_ch)
+    // fastp(spotyping.out.spoligo_ch)
+    // post_fastqc(fastp.out.trimmed_reads)
+    // lineage(fastp.out.trimmed_reads)
     if(run_mode == "snp" || run_mode == "all"){
-        read_map(fastp.out.trimmed_reads)
-        mark_dups(read_map.out.bam)
+        // read_map(fastp.out.trimmed_reads)
+        // mark_dups(read_map.out.bam)
+        // freebayes(mark_dups.out.nodup_bam, mark_dups.out.nodup_bai)
+        // vcf_filter(freebayes.out.freebayes_ch)
+        // psuedo_assembly(vcf_filter.out.filter_ch)
+        psuedo_assembly(filter_ch)
+        iqtree_phylo(psuedo_assembly.out.fasta_ch.collect())
+        // stats(psuedo_assembly.out.fasta_ch, iqtree_phylo.out.statistics_ch)
+    }
+
+    if(run_mode == "pan" || run_mode == "all"){
+        assembly(fastp.out.trimmed_reads)
+        quast(assembly.out.assembly_ch)
+        annotate(assembly.out.assembly_ch)
+        panaroo(annotate.out.annotate_ch.collect())
+        iqtree_core(panaroo.out.panaroo_ch.collect())
+        filter_pan(panaroo.out.panaroo_ch.collect())
+        multiqc(pre_fastqc.out.fastqc_ch1.collect(),post_fastqc.out.fastqc_ch2.collect())
+        mbovis_verification(spotyping.out.spoligo_multi.collect(), lineage.out.tbprofile_ch.collect())
     }
 
 }
 
 process spotyping {
-
     tag "${sample_id}"
 
     publishDir "${params.output}/mbovpan_results/spotyping", mode: 'copy'
 
     conda "${workflow.projectDir}/envs/spotyping.yaml"
 
-    errorStrategy 'ignore'
-
-    debug true
-
     input:
-
     tuple val(sample_id), path(read1), path(read2)
 
     output:
-
     tuple val(sample_id), path("${read1.baseName}.fastq"), path("${read2.baseName}.fastq"), emit: spoligo_ch
-
     path("${read1.baseName - ~/_1/}.out"), emit: spoligo_multi
 
     script:
-
     """
+    echo "Starting spotyping process for sample: ${sample_id}"
+    echo "Read1: ${read1}"
+    echo "Read2: ${read2}"
 
-    python3 ${workflow.projectDir}/scripts/SpoTyping/SpoTyping.py ${read1} ${read2} -o ${read1.baseName - ~/_1/}.out > stdout.txt 
+    if [ -z "${read1}" ] || [ -z "${read2}" ]; then
+        echo "Error: One of the input files is null"
+        exit 1
+    fi
 
+    python3 ${workflow.projectDir}/scripts/SpoTyping/SpoTyping.py ${read1} ${read2} -o ${read1.baseName - ~/_1/}.out > stdout.txt 2> stderr.txt
+    if [ \$? -ne 0 ]; then
+        echo "Error in SpoTyping.py script"
+        cat stderr.txt
+        exit 1
+    fi
+
+    echo "spotyping process completed successfully for sample: ${sample_id}"
     """
-
-}   
+}
 
 process pre_fastqc {
     tag "${sample_id}"
@@ -240,11 +266,9 @@ process pre_fastqc {
     conda 'bioconda::fastqc'
 
     input:
-
     tuple val(sample_id), path(read_one), path(read_two)
 
     output:
-
     path("pre_fastqc_${read_one.baseName - ~/_1*/}_logs/*"), emit: fastqc_ch1
 
     script:
@@ -258,19 +282,20 @@ process pre_fastqc {
 
 process fastp {
     tag "${sample_id}"
-    conda 'bioconda::fastp'
 
     publishDir "${params.output}/mbovpan_results/read_trimming", mode: 'copy'
+    
+    conda 'bioconda::fastp'
 
     input:
     tuple val(sample_id), path(read_one), path(read_two)
 
     output:
-    tuple val(sample_id), path("${read_one.baseName.replaceAll('_1$', '')}_trimmed_R1.fastq"), path("${read_one.baseName.replaceAll('_1$', '')}_trimmed_R2.fastq"), emit: trimmed_reads
+    tuple val(sample_id), path("${read_one.baseName.replaceAll('_1$', '')}_trimmed_R1.fastq"), path("${read_two.baseName.replaceAll('_2$', '')}_trimmed_R2.fastq"), emit: trimmed_reads
 
     script:
     """
-    fastp -w ${params.threads} -q 30 --detect_adapter_for_pe -i ${read_one} -I ${read_two} -o ${read_one.baseName.replaceAll("_1\$", "")}_trimmed_R1.fastq -O ${read_one.baseName.replaceAll("_1\$", "")}_trimmed_R2.fastq    
+    fastp -w ${params.threads} -q 30 --detect_adapter_for_pe -i ${read_one} -I ${read_two} -o ${read_one.baseName.replaceAll("_1\$", "")}_trimmed_R1.fastq -O ${read_two.baseName.replaceAll("_2\$", "")}_trimmed_R2.fastq    
     """
 }
 
@@ -285,13 +310,13 @@ process post_fastqc {
     tuple val(sample_id), path(trim_one), path(trim_two)
 
     output:
-    path("post_fastqc_${trim_one.baseName - ~/_1*/}_logs/*"), emit: fastqc_ch2
+    path("post_fastqc_${trim_one.baseName.replaceAll('_R[12]$', '')}_logs/*"), emit: fastqc_ch2
 
     script:
     """
-    mkdir post_fastqc_${trim_one.baseName - ~/_1*/}_logs
+    mkdir post_fastqc_${trim_one.baseName.replaceAll('_R[12]$', '')}_logs
 
-    fastqc -o post_fastqc_${trim_one.baseName - ~/_1*/}_logs -f fastq -q ${trim_one} ${trim_two}
+    fastqc -o post_fastqc_${trim_one.baseName.replaceAll('_R[12]$', '')}_logs -f fastq -q ${trim_one} ${trim_two}
     """
 }
 
@@ -330,7 +355,7 @@ process read_map {
 
     script:
     """
-    bowtie2 --threads ${task.cpus} -x ${workflow.projectDir}/ref/mbov_bowtie_index -1 ${trim_one} -2 ${trim_two} | samtools view -Sb | samtools sort -o ${trim_one.baseName.replaceAll('_trimmed_R.*', '')}.bam
+    bowtie2 --threads ${params.threads} -x ${workflow.projectDir}/ref/mbov_bowtie_index -1 ${trim_one} -2 ${trim_two} | samtools view -Sb | samtools sort -o ${trim_one.baseName.replaceAll('_trimmed_R.*', '')}.bam
     """
 }
 
@@ -345,8 +370,8 @@ process mark_dups {
     tuple val(sample_id), file(bam)
 
     output:
-    tuple val(sample_id), file("${bam.baseName}.nodup.bam"), emit: nodup_bam
-    path "${bam.baseName}.nodup.bam.bai", emit: nodup_bai
+    tuple val(sample_id), path("${bam.baseName}.nodup.bam"), emit: nodup_bam
+    tuple val(sample_id), path("${bam.baseName}.nodup.bam.bai"), emit: nodup_bai
 
     script:
     """
@@ -355,103 +380,134 @@ process mark_dups {
     """
 }
 
-//     process freebayes {
-//     publishDir = "$output/mbovpan_results/variant_calling" 
+process freebayes {
+    tag "${sample_id}"
 
-//     cpus threads
+    publishDir "${params.output}/mbovpan_results/variant_calling", mode: 'copy'
 
-//     conda "$workflow.projectDir/envs/freebayes.yaml"
+    conda "${workflow.projectDir}/envs/freebayes.yaml"
 
-//     input:
-//     file(bam) from nodup1_ch
-//     path(reference) from ref
+    input:
+    tuple val(sample_id), path(nodup_bam)
+    tuple val(sample_id), path(nodup_bai)
 
-//     output:
-//     file("${bam.baseName - ~/.nodup/}.vcf") into freebayes_ch 
-
-//     script:
-//     """
-//     cp $workflow.launchDir/${bam.baseName - ~/.nodup/}.nodup.bam.bai ./
-//     freebayes-parallel ${range} ${task.cpus} -f ${ref} ${bam} > ${bam.baseName - ~/.nodup/}.vcf
-//     """
-//     }
-
-//     process vcf_filter {
-//     publishDir = "$output/mbovpan_results/variant_calling" 
-
-//     conda "$workflow.projectDir/envs/vcflib.yaml"
-
-//     debug true
-
-//     input:
-//     file(vcf) from freebayes_ch
-
-//     output:
-//     file("${vcf.baseName}.filtered.vcf") into filter_ch
-
-//     script:
-//     """
-//     vcffilter -f "QUAL > ${qual}" ${vcf} | vcffilter -f "DP > ${depth}" | vcffilter -f "MQM > ${mapq}" |  vcffilter -f "TYPE = snp" | bedtools intersect -header -a - -b $workflow.projectDir/ref/pe_ppe_regions.gff3 -v > ${vcf.baseName}.filtered.vcf
-//     """
-
-//     } 
-
-//     filter_ch.into {
-//         filter1_ch
-//         filter2_ch
-//     }
-
-//     stats_ch = fastp_reads4.merge(nodup2_ch).merge(filter2_ch)
-
-
-//     process psuedo_assembly {
-//         publishDir = "$output/mbovpan_results/assemblies"
-
-//         conda "$workflow.projectDir/envs/consensus.yaml"
-
-//         input:
-//         file(vcf) from filter1_ch 
-
-//         output:
-//         file("${vcf.baseName - ~/.filtered/}.consensus.fasta") into fasta_ch
-
-//         script:
-//         """
-//         bgzip ${vcf} 
-//         bcftools index ${vcf}.gz
-//         bcftools norm --check-ref s --fasta-ref $ref -Ov ${vcf}.gz > ${vcf.baseName}.norm.vcf
-//         bgzip ${vcf.baseName}.norm.vcf
-//         bcftools index ${vcf.baseName}.norm.vcf.gz
-//         cat ${ref} | vcf-consensus ${vcf.baseName}.norm.vcf.gz > ${vcf.baseName - ~/.filtered/}.dummy.fasta
-//         sed 's|LT708304.1|${vcf.baseName - ~/.filtered/}}|g' ${vcf.baseName - ~/.filtered/}.dummy.fasta > ${vcf.baseName - ~/.filtered/}.consensus.fasta
-//         """
-//     }
+    output:
+    path("${nodup_bam.baseName.replaceAll('.nodup', '')}.vcf"), emit: freebayes_ch
+ 
+    script:
+    """
+    freebayes-parallel ${range} ${params.threads} -f ${ref} ${nodup_bam} > ${nodup_bam.baseName.replaceAll('.nodup', '')}.vcf
+    """
+}
     
-//     process iqtree_phylo {
-//         publishDir = "$output/mbovpan_results/phylogeny"
-        
-//         conda "$workflow.projectDir/envs/iqtree.yaml"
 
-//         errorStrategy "ignore"
-        
-//         cpus threads 
 
-//         input:
-//         file(aln) from fasta_ch.collect()
-        
-//         output:
-//         file("*") into phylo_ch 
-//         file("phylo_out.txt") into statistics_ch
-        
-//         script:
-//         """
-//         cat *.fasta > mbovpan_align.fasta
-//         cat $workflow.projectDir/ref/mbov_reference.fasta >> mbovpan_align.fasta
-//         snp-sites -o mbovpan_align.snp_only.fasta mbovpan_align.fasta
-//         iqtree -s mbovpan_align.snp_only.fasta -m MFP -nt ${task.cpus} -bb 1000 -pre mbovpan_align -o "LT708304.1"
-//         echo "file created to make statistics file build conda env last" > phylo_out.txt
-//         """
-//     }
+process vcf_filter {
+    tag "${vcf.baseName}"
+
+    publishDir "${params.output}/mbovpan_results/variant_calling", mode: 'copy'
+
+    conda "${workflow.projectDir}/envs/vcflib.yaml"
+
+    input:
+    path(vcf)
+
+    output:
+    path("${vcf.baseName}.filtered.vcf"), emit: filter_ch
+
+    script:
+    """
+    vcffilter -f "QUAL > ${qual}" ${vcf} | vcffilter -f "DP > ${depth}" | vcffilter -f "MQM > ${mapq}" |  vcffilter -f "TYPE = snp" | bedtools intersect -header -a - -b ${workflow.projectDir}/ref/pe_ppe_regions.gff3 -v > ${vcf.baseName}.filtered.vcf
+    """
+}
+process psuedo_assembly {
+    tag "${vcf.baseName}"
+
+    publishDir "${params.output}/mbovpan_results/assemblies", mode: 'copy'
+
+    conda "${workflow.projectDir}/envs/consensus.yaml"
+
+    input:
+    path(vcf)
+
+    output:
+    path("${vcf.baseName.replaceAll('.filtered', '')}.consensus.fasta"), emit: fasta_ch
+
+    script:
+    """
+    set -euxo pipefail
+
+    echo 'Compressing VCF file'
+    bgzip ${vcf}
+    
+    echo 'Indexing compressed VCF file'
+    bcftools index ${vcf}.gz
+    
+    echo 'Creating output directory if it does not exist'
+    mkdir -p ${params.output}/mbovpan_results/assemblies
+    
+    echo 'Generating initial mismatch report'
+    bcftools norm --check-ref s --fasta-ref ${ref} -Ov ${vcf}.gz > ${vcf.baseName}.norm.vcf 2> ${params.output}/mbovpan_results/assemblies/${vcf.baseName.replaceAll('.filtered', '')}_initial_mismatch_report.txt
+    
+    echo 'Force fixing mismatches'
+    bcftools norm --check-ref s --fasta-ref ${ref} -Ov ${vcf}.gz > ${vcf.baseName}.norm.vcf
+    
+    echo 'Generating post-normalization mismatch report'
+    bcftools norm --check-ref s --fasta-ref ${ref} -Ov ${vcf.baseName}.norm.vcf > /dev/null 2> ${params.output}/mbovpan_results/assemblies/${vcf.baseName.replaceAll('.filtered', '')}_post_normalization_mismatch_report.txt
+    
+    echo 'Compressing normalized VCF file'
+    bgzip ${vcf.baseName}.norm.vcf
+    
+    echo 'Indexing normalized VCF file'
+    bcftools index ${vcf.baseName}.norm.vcf.gz
+    
+    echo 'Generating consensus sequence using bcftools consensus'
+    bcftools consensus -f ${ref} ${vcf.baseName}.norm.vcf.gz > ${vcf.baseName.replaceAll('.filtered', '')}.dummy.fasta
+    
+    echo 'Replacing sequence name in consensus sequence'
+    sed "s|LT708304.1|${vcf.baseName.replaceAll('.filtered', '')}|g" ${vcf.baseName.replaceAll('.filtered', '')}.dummy.fasta > ${vcf.baseName.replaceAll('.filtered', '')}.consensus.fasta
+    """
+}
+
+process iqtree_phylo {
+    publishDir "${params.output}/mbovpan_results/phylogeny", mode: 'copy'
+    
+    conda "${workflow.projectDir}/envs/iqtree.yaml"
+    
+    input:
+    path(aln)
+    
+    output:
+    path("*"), emit: phylo_ch 
+    path("phylo_out.txt"), emit: statistics_ch
+    
+    script:
+    """
+    cat *.fasta > mbovpan_align.fasta
+    cat ${workflow.projectDir}/ref/mbov_reference.fasta >> mbovpan_align.fasta
+    snp-sites -o mbovpan_align.snp_only.fasta mbovpan_align.fasta
+    iqtree -s mbovpan_align.snp_only.fasta -m MFP -nt ${task.cpus} -bb 1000 -pre mbovpan_align -o "LT708304.1"
+    echo "file created to make statistics file build conda env last" > phylo_out.txt
+    """
+}
+
+process stats {
+    publishDir "${params.output}/mbovpan_results/statistics", mode: 'copy'
+
+    conda "${workflow.projectDir}/envs/statistics.yaml"
+
+    input:
+    path(nec_files) 
+    path(dummy_variable)
+
+    output:
+    file("${nec_files[0].baseName}.stats"), emit: output_stat_ch
+
+    script:
+    """
+    python ${workflow.projectDir}/scripts/statistics.py ${nec_files[0]} ${nec_files[1]} ${nec_files[2]} ${nec_files[3]} > ${nec_files[0].baseName}.stats
+    """
+}
 
 //     process stats {
 //         publishDir = "$output/mbovpan_results/statistics"
@@ -474,190 +530,158 @@ process mark_dups {
 //     }
 // }
 
-// assembly = Channel.create()
-// if(run_mode == "pan" || run_mode == "all"){
+process assembly {
+    tag "${sample_id}"
+
+    publishDir "${params.output}", mode: 'copy'
+
+    conda "bioconda::spades python=3.9"
+
+    input:
+    tuple val(sample_id), path(trim_one), path(trim_two)
+
+    output:
+    path("${trim_one.baseName.replaceAll('_trimmed_R.*', '')}.scaffold.fasta"), emit: assembly_ch
+
+    script:
+    """
+    mkdir ${trim_one.baseName.replaceAll('_trimmed_R.*', '')}
+    spades.py -1 ${trim_one} -2 ${trim_two} --careful -o ${trim_one.baseName.replaceAll('_trimmed_R.*', '')} -t ${params.threads} --only-assembler
+    cd ${trim_one.baseName.replaceAll('_trimmed_R.*', '')}
+    mv scaffolds.fasta ../${trim_one.baseName.replaceAll('_trimmed_R.*', '')}.scaffold.fasta
+    """
+}
+
+process quast {
+    tag "${assemblies.baseName.replaceAll('.scaffold', '')}"
+
+    publishDir "${params.output}/mbovpan_results/statistics"
+
+    conda "${workflow.projectDir}/envs/quast.yaml"
     
-//     process assembly {
-//     publishDir = output 
+    input:
+    path (assemblies)
     
-//     conda "bioconda::spades"
+    output:
+    path ("*"), emit: quast_output
     
-//     errorStrategy "ignore"
+    script:
+    """
+    quast -o assembly_stats ${assemblies} -r ${ref} -t ${params.threads}
+    """
+}
 
-//     cpus threads
+process annotate {
+    tag "${assembly.baseName.replaceAll('.scaffold', '')}"
 
-//     input:
-//     tuple file(trim1), file(trim2) from fastp_reads3
-
-//     output:
-//     file("${trim1.baseName - ~/_trimmed_R*/}.scaffold.fasta") into assembly_ch
-
-//     script:
-//     """
-//     mkdir ${trim1.baseName}
-//     spades.py -1 ${trim1} -2 ${trim2} --careful -o ${trim1.baseName} -t ${task.cpus} --only-assembler
-//     cd ${trim1.baseName}
-//     mv scaffolds.fasta  ../${trim1.baseName - ~/_trimmed_R*/}.scaffold.fasta
-//     """
-// }
-
-// assembly_ch = assembly_ch
-
-// assembly_ch.into {
-//     assembly_ch1
-//     assembly_ch2
-// }
-
-// process quast {
-//     publishDir = "$output/mbovpan_results/statistics"
-
-//     conda "$workflow.projectDir/envs/quast.yaml"
+    publishDir "${params.output}/mbovpan_results/annotations"
     
-//     cpus threads
+    conda "$workflow.projectDir/envs/prokka.yaml"
 
-//     input:
-//     file(assemblies) from assembly_ch1.collect()
+    input:
+    path assembly
     
-//     output:
-//     file("*") into quast_ch
+    output:
+    path "${assembly.baseName.replaceAll('.scaffold', '')}.annot.gff", emit: annotate_ch
     
-//     script:
-//     """
-//     quast -o assembly_stats ${assemblies} -r ${ref} -t ${task.cpus}
-//     """
-// }
+    script:
+    """
+    prokka --outdir ./${assembly.baseName.replaceAll('.scaffold', '')} --prefix ${assembly.baseName.replaceAll('.scaffold', '')}.annot ${assembly}
+    ls ./${assembly.baseName.replaceAll('.scaffold', '')}  # Add this line
+    cp ./${assembly.baseName.replaceAll('.scaffold', '')}/${assembly.baseName.replaceAll('.scaffold', '')}.annot.gff ./
+    """
+}
 
+process panaroo {
+    publishDir "${params.output}/mbovpan_results/pangenome"
 
-// process annotate {
-//     publishDir = "$output/mbovpan_results/annotations"
-    
-//     cpus threads
+    conda "${workflow.projectDir}/envs/panaroo.yaml"
 
-//     conda "$workflow.projectDir/envs/prokka.yaml"
+    input:
+    path gff
 
-//     errorStrategy "ignore"
+    output:
+    path (input),  emit: panaroo_ch
 
-//     input:
-//     file(assembly) from assembly_ch2
+    script:
+    """
+    panaroo -i *.gff -o ./ -t ${params.threads} -a core --core_threshold 0.98 --clean-mode strict
+    """
+}
 
-//     output:
-//     file("${assembly.baseName - ~/.scaffold/}.annot.gff") into annotate_ch
+process iqtree_core {
+    publishDir "${params.output}/mbovpan_results/phylogeny", mode: 'copy'
 
-//     script:
-//     """
-//     prokka  --outdir ./${assembly.baseName - ~/.scaffold/} --cpus ${task.cpus} --prefix ${assembly.baseName - ~/.scaffold/}.annot ${assembly} 
-//     cp ./${assembly.baseName - ~/.scaffold/}/${assembly.baseName - ~/.scaffold/}.annot.gff ./
-//     """
-// }
+    conda "${workflow.projectDir}/envs/iqtree.yaml"
 
-// process panaroo {
-//     publishDir = "$output/mbovpan_results/pangenome"
+    input:
+    path(input)
 
-//     cpus threads
+    output:
+    path("*"), emit: iqtreecore_ch
 
-//     input:
-//     file(gff) from annotate_ch.collect()
+    script:
+    """
+    snp-sites -o mbovpan_align.snp_only.fasta core_gene_alignment.aln
+    iqtree -s mbovpan_align.snp_only.fasta -m MFP -nt ${task.cpus} -bb 1000 -pre mbovis_core 
+    """
+}
 
-//     output:
-//     file("*") into roary_ch
+process filter_pan {
+    publishDir "${params.output}/mbovpan_results/filtered_pan", mode: 'copy'
 
-//     script:
-//     """
-//     panaroo -i *.gff -o ./ -t ${task.cpus} -a core --core_threshold 0.98 --clean-mode strict
-//     """
-// }
+    conda "bioconda::blast=2.9.0 pandas"
 
-// roary_ch.into{
-//     roary_ch2
-//     roary_ch3
-//     roary_ch4
-//     roary_ch5
-//     roary_ch_filter
-// }
+    input:
+    path(input)
 
+    output:
+    path('mbovis_filtered_cogs.csv'), emit: filtered_pan_ch
 
-// process iqtree_core {
-//         publishDir = "$output/mbovpan_results/phylogeny"
-        
-//         conda "$workflow.projectDir/envs/iqtree.yaml"
-        
-//         cpus threads 
-        
-//         errorStrategy 'ignore'
-        
-        
-//         input:
-//         file(input) from roary_ch.collect()
-    
-//         output:
-//         file("*") into iqtreecore_ch
-        
-//         script:
-//         """
-//         snp-sites -o mbovpan_align.snp_only.fasta core_gene_alignment.aln
-//         iqtree -s mbovpan_align.snp_only.fasta -m MFP -nt ${task.cpus} -bb 1000 -pre mbovis_core 
-//         """
-//     }
+    script:
+    """
+    # first determine the genes that are present and use blast to find their true annotation
+    blastn -query pan_genome_reference.fa -max_target_seqs 1 -db ${workflow.projectDir}/ref/mbovis_reference -out mb.out -outfmt "6 delim=, qseqid sseqid length qstart qend sstart send qlen slen"
+    echo "qseqid,sseqid,length,qstart,qend,sstart,send,qlen,slen" > heading.txt 
+    cat heading.txt mb.out >> mb.out.csv
 
+    # once mb.out is created, we can use python to 1) create length %, 2) filter by 75% or higher, and 3) reduce repetitive blast results
+    python ${workflow.projectDir}/scripts/blast_result_filter.py gene_presence_absence.csv
+    """
+}
 
-// process filter_pan {
-//     publishDir = "./"
-    
-//     conda "bioconda::blast=2.9.0 pandas"
+process multiqc {
+    publishDir "${params.output}/mbovpan_results/statistics", mode: 'copy'
 
-//     debug 'true'
-    
-//     input:
-//     file("*") from roary_ch_filter.collect()
+    conda "${workflow.projectDir}/envs/multiqc.yaml"
 
-//     output:
-//     file('mbovis_filtered_cogs.csv')
-    
-    
-//     script:
-//     """
-//     # first determine the genes that are present and use blast to find their true annotation
-//     blastn -query pan_genome_reference.fa -max_target_seqs 1 -db $workflow.projectDir/ref/mbovis_reference -out mb.out -outfmt "6 delim=, qseqid sseqid length qstart qend sstart send qlen slen"
-//     echo "qseqid,sseqid,length,qstart,qend,sstart,send,qlen,slen" > heading.txt 
-//     cat heading.txt mb.out >> mb.out.csv
+    input:
+    path pre
+    path post
 
-//     # once mb.out is created, we can use python to 1) create length %, 2) filter by 75% or higher, and 3) reduce repetitive blast results
-//     python $workflow.projectDir/scripts/blast_result_filter.py gene_presence_absence.csv
-//     """
-// }
+    output:
+    path("mbovpan_report*"), emit: multiqc_ch
 
-// }
+    script:
+    """
+    export LC_ALL=en_US.utf8
+    export LANG=en_US.utf8
+    multiqc -n mbovpan_report .
+    """
+}
 
-// process multiqc {
-//     publishDir = "$output/mbovpan_results/statistics"
-    
-//     conda "$workflow.projectDir/envs/multiqc.yaml"
+process mbovis_verification {
+    publishDir "${params.output}/mbovpan_results/lineage_info", mode: 'copy'
 
-//     input:
-//     file(pre) from fastqc_ch1.collect().ifEmpty([])
-//     file(post) from fastqc_ch2.collect().ifEmpty([])
-    
-//     output:
-//     file("mbovpan_report*")
+    input:
+    path spoligotype_info
+    path lineage_info
 
-//     script:
-//     """
-//     multiqc -n mbovpan_report .
-//     """
-// }
+    output:
+    path("mbovpan_lineage_info.csv"), emit: mbovis_verification_ch
 
-// process mbovis_verification {
-//     publishDir = "$output/mbovpan_results/lineage_info"
-
-//     input:
-//     file(spoligotype_info) from spoligo_multi.collect().ifEmpty([])
-//     file(lineage_info) from tbprofile_ch.collect().ifEmpty([])
-
-//     output:
-//     file("mbovpan_lineage_info.csv")
-
-//     script:
-//     """
-//     python ${lineage_table} > mbovpan_lineage_info.csv
-//     """
-// }
+    script:
+    """
+    python ${lineage_table} > mbovpan_lineage_info.csv
+    """
+}
