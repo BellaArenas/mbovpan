@@ -1,0 +1,19 @@
+name: mbovpan
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - nextflow=22.10.6
+  - fastp
+  - fastqc
+  - samtools
+  - picard
+  - bwa
+  - biopython
+  - freebayes
+  - spades
+  - mamba
+  - multiqc
+prefix: /home/n/noahlegall/.conda/envs/mbovpan
+

@@ -1,0 +1,11 @@
+name: vcflib_test
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - vcflib=1.0.1
+  - bedtools=2.25.0
+  - bcftools=1.19
+
+prefix: /home/noahaus/.conda/envs/vcflib_test

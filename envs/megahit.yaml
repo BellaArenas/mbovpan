@@ -1,0 +1,7 @@
+name: megahit
+channels:
+  - bioconda
+  - defaults
+dependencies:
+  - megahit
+prefix: /home/noahaus/.conda/envs/megahit

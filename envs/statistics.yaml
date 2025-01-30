@@ -1,0 +1,10 @@
+name: stats
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - samtools
+  - rtg-tools
+  - fastx_toolkit
+prefix: /Users/noahaus/opt/miniconda3/envs/stats

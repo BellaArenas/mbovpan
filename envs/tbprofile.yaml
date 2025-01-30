@@ -1,0 +1,9 @@
+name: tb-profile
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - tb-profiler=5.0.0
+  - freebayes=1.3.6
+prefix: /home/noahaus/.conda/envs/tb-profile
