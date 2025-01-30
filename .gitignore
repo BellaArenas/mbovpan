@@ -1,0 +1,60 @@
+# OS generated files
+.DS_Store
+
+# Editor backup files
+*~
+*.swp
+*.bak
+*.tmp
+
+# Compiled source #
+###################
+compiler_compat/
+jmods/
+sbin/
+x86_64-conda_cos7-linux-gnu/
+x86_64-conda-linux-gnu/
+
+# Packages and local environment #
+##################################
+conda-meta/
+envs/
+lib/
+libexec/
+pkgs/
+ssl/
+include/
+share/
+bin/
+legal/
+
+# Specific project outputs and temporary data #
+##############################################
+work/
+outputs/
+
+# Logs
+.nextflow.log*
+.nextflow/
+
+# Ignored scripts and configurations #
+#####################################
+*.nf
+conf/
+db/
+etc/
+include/
+licensing/
+*.config
+README.md
+
+# Source control
+.git/
+
+# Other directories
+man/
+share/
+x86_64-*/
+
+# Specific files
+DISCLAIMER
